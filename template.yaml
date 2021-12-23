@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: EventBridge example filtering and alerting
+
+Parameters:
+  Email:
+    Type: String
+
+Resources:
+  # This will be the role we will try to assume to trigger the EventBridge rule
+  IamRole:
+   Type: AWS::IAM::Role
+   Properties:
+     AssumeRolePolicyDocument:
+      Version: "2012-10-17"
+      Statement:
+        -
+          Effect: "Allow"
+          Principal:
+            AWS: !Ref AWS::AccountId
+          Action:
+            - "sts:AssumeRole"
+
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref Email
+
+
+  # This Rule will listen to the default event bus
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Demo rule to react on assumption of ${IamRole.Arn}"
+      EventPattern:
+        # CloudFormation expects a JSON-like key-value pairs here.
+        # Proceed with caution but don't worry too much.
+        # The worst that will happen - it won't work and you will have to debug it.
+        source:
+          - "aws.sts"
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - "sts.amazonaws.com"
+          eventName:
+            - "AssumeRole"
+          requestParameters:
+            roleArn:
+              - !GetAtt IamRole.Arn
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SnsTopic
+          Id: AlarmTopic # This must be unique!
+          InputTransformer:
+            InputPathsMap:
+              arn: "$.detail.userIdentity.arn" # Full ARN of the IAM entity
+            # EventBridge Transforms don't support multiline events for SNS.
+            # It also requires string variable with the quotes and does not work
+            # with CloudFormations's string formatting.
+            # Hence we need a hack with double quotes and escape characters.
+            InputTemplate: "\"Security alarm notification: the user <arn> has assumed the dangerous role.\""
+
+Outputs:
+  AssumeIamRoleCommand:
+    Description: Run this command to test your rule
+    Value: !Sub "aws sts assume-role --role-arn ${IamRole.Arn} --role-session-name test"
